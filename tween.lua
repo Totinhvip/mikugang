@@ -37,6 +37,55 @@ getgenv().__TPConns = {}
 
 local conn, bodyVelocity, bodyGyro, targetPos
 local flying = false
+local noclipParts = {}
+local noclipConn = nil
+
+-- Noclip: ban goc chi tat CanCollide cho HumanoidRootPart nen dau/tay/chan/than van dam tuong
+-- (Carter bao 2026-08-22: bay bi tong vao tuong). Phai tat cho MOI BasePart trong Character.
+--   CanCollide = khong dam   CanTouch = khong kich hoat vung damage/bay   CanQuery = raycast bo qua
+-- Quet 1 lan luc bat dau bay roi nho lai, moi frame chi gan co tren danh sach do
+-- (goi GetDescendants moi frame nhu ban file 15 la phi CPU vo ich).
+local function trackPart(v)
+	if not v:IsA("BasePart") then return end
+	if noclipParts[v] ~= nil then return end
+	noclipParts[v] = { collide = v.CanCollide, touch = v.CanTouch, query = v.CanQuery }
+end
+
+local function scanNoclip(char)
+	if not char then return end
+	for _, v in ipairs(char:GetDescendants()) do trackPart(v) end
+	if noclipConn then noclipConn:Disconnect() end
+	-- deo accessory / cam tool giua chung thi bat luon part moi
+	noclipConn = char.DescendantAdded:Connect(function(v)
+		if v:IsA("BasePart") then trackPart(v) end
+	end)
+end
+
+local function applyNoclip()
+	for v, old in pairs(noclipParts) do
+		if v.Parent then
+			if v.CanCollide then v.CanCollide = false end
+			if v.CanTouch then v.CanTouch = false end
+			pcall(function() if v.CanQuery then v.CanQuery = false end end)
+		else
+			noclipParts[v] = nil
+		end
+	end
+end
+
+local function restoreNoclip()
+	if noclipConn then noclipConn:Disconnect() noclipConn = nil end
+	for v, old in pairs(noclipParts) do
+		if v.Parent then
+			pcall(function()
+				v.CanCollide = old.collide
+				v.CanTouch = old.touch
+				v.CanQuery = old.query
+			end)
+		end
+	end
+	noclipParts = {}
+end
 
 local function removeMovers()
 	if bodyVelocity then pcall(function() bodyVelocity:Destroy() end) bodyVelocity = nil end
@@ -68,6 +117,7 @@ local function stopFly()
 	targetPos = nil
 	if conn then conn:Disconnect() conn = nil end
 	removeMovers()
+	restoreNoclip()
 	local char = LP.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	local hum = char and char:FindFirstChildWhichIsA("Humanoid")
@@ -88,7 +138,7 @@ local function step()
 	local hum = char and char:FindFirstChildWhichIsA("Humanoid")
 	if not root or not hum then return end
 
-	root.CanCollide = false
+	applyNoclip()
 	hum.PlatformStand = true
 	setupMovers(root)
 
@@ -109,6 +159,7 @@ local function startFly(target)
 	else return false end
 	targetPos = pos
 	flying = true
+	scanNoclip(LP.Character)
 	if not conn then
 		conn = RunService.Heartbeat:Connect(function()
 			pcall(step)
@@ -121,6 +172,7 @@ end
 table.insert(getgenv().__TPConns, LP.CharacterAdded:Connect(function(char)
 	char:WaitForChild("HumanoidRootPart", 5)
 	removeMovers()
+	noclipParts = {}
 	stopFly()
 end))
 table.insert(getgenv().__TPConns, LP.CharacterRemoving:Connect(function()
