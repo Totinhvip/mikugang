@@ -1,4 +1,4 @@
--- [ TP ] bay bang BodyVelocity + PlatformStand, thay Tp.lua cua tokaruun/New-MeyyHub
+-- [ TP ] bay bang BodyVelocity, thay Tp.lua cua tokaruun/New-MeyyHub
 -- (ban do la Luraph v14.7 + whitelist jnkie, khong doc/sua duoc).
 --
 -- Do that 2026-08-22 tren acc EllieShad0wTurb0 @ place 2753915549:
@@ -9,14 +9,16 @@
 -- So voi 2 cach da thu:
 --   tween chia chang 200 studs      : 259-262 studs/s, phai chia chang  (giu o tp_tween.lua.bak)
 --   BodyVelocity + workspace.Gravity=0: 300 studs/s nhung tat trong luc CA CLIENT
---   BodyVelocity + PlatformStand     : 300 studs/s, chi tat trong luc CUA MINH  <- dung cai nay
+--   BodyVelocity + PlatformStand BAT SUOT : 300 studs/s NHUNG toi noi khong danh duoc boss
+--   BodyVelocity KHONG PlatformStand      : dung tren mat dat thi Humanoid ghi lai, 0 studs/s
+--   BodyVelocity + PlatformStand chi khi DANG BAY : 301 studs/s va toi noi van danh duoc  <- dung cai nay
 --
 -- Khong bi "tween back" vi khong set CFrame ma day bang luc, server tu tinh vi tri nen chap nhan.
 --
 -- API (giu nguyen de kaitun khong phai sua 47 cho goi):
 --   getgenv().TP(target)      nhan CFrame hoac Vector3, cho toi noi moi tra ve (true/false)
 --   getgenv().TPAsync(target) khong cho, tra ve ngay
---   getgenv().TPStop()        dung bay, tra lai CanCollide + PlatformStand
+--   getgenv().TPStop()        dung bay, tra lai CanCollide + go mover
 --   getgenv().TPFlying()      dang bay hay khong
 --   _G.TocDoTween             toc do (mac dinh 300, DUNG dat qua 300)
 --   _G.TPArrive               coi la toi dich khi con cach bao nhieu studs (mac dinh 8)
@@ -138,18 +140,42 @@ local function step()
 	local hum = char and char:FindFirstChildWhichIsA("Humanoid")
 	if not root or not hum then return end
 
+	-- KHONG dung hum.PlatformStand = true. Do that 2026-08-23 (Carter bao boss Haki khong an damage):
+	-- PlatformStand coi nhu nhan vat dang nga -> KHONG dung duoc vu khi. Acc bay toi sat boss
+	-- (cach 23 studs, cam Dragon Talon, FastAttack loaded) ma boss khong mat mot diem mau nao;
+	-- tat PlatformStand 12s thi boss tu 14733 HP xuong 0 ngay.
+	-- BodyVelocity MaxForce 9e9 da du chong trong luc, khong can co nay.
 	applyNoclip()
-	hum.PlatformStand = true
 	setupMovers(root)
 
 	local speed = _G.TocDoTween or 300
 	local dist = (targetPos - root.Position).Magnitude
 	if dist > 5 then
 		bodyVelocity.Velocity = (targetPos - root.Position).Unit * speed
+		-- Do that 2026-08-23 tren wegkopenri: dung TREN MAT DAT thi Humanoid ghi lai,
+		-- BodyVelocity day 300 ma AssemblyLinearVelocity chi ~0.1 -> bay 15 giay di 0 studs.
+		-- (Set thang AssemblyLinearVelocity = 200 thi 1 frame sau con 89.) Phai roi dieu khien
+		-- Humanoid moi keo duoc: bat PlatformStand -> do lai duoc 301 studs/s.
+		-- Ban truoc bat PlatformStand SUOT nen toi noi van khong danh duoc boss (Haki, 14733 HP
+		-- khong suy chuyen). Nen chi bat KHI DANG BAY, toi dich la tra lai ngay o nhanh duoi.
+		hum.PlatformStand = true
 	else
 		bodyVelocity.Velocity = Vector3.zero
+		hum.PlatformStand = false
 	end
-	bodyGyro.CFrame = CFrame.lookAt(root.Position, targetPos)
+	-- Do that 2026-08-23 (Carter bao "nhan vat quay quay quai"): AssemblyAngularVelocity do duoc
+	-- (-3, 75, -131) rad/s, huong nhin lech dot=0.760 trong 2 giay.
+	-- Nguyen nhan: lookAt(root.Position, targetPos) chay MOI FRAME. Khi toi sat dich (hoac bam
+	-- mob dang chay) thi diem nhin gan trung than -> huong lat lien tuc, ma BodyGyro P=9e4 D=500
+	-- bam rat manh nen thanh xoay loan.
+	-- Sua: (1) chi lai huong khi con cach > 10 studs, gan roi thi giu nguyen huong cu;
+	--      (2) nhin PHANG - bo chenh lech Y, khong thi nhan vat chui dau/ngua ra khi bay len xuong.
+	if dist > 10 then
+		local flat = Vector3.new(targetPos.X, root.Position.Y, targetPos.Z)
+		if (flat - root.Position).Magnitude > 1 then
+			bodyGyro.CFrame = CFrame.lookAt(root.Position, flat)
+		end
+	end
 end
 
 local function startFly(target)
@@ -159,6 +185,12 @@ local function startFly(target)
 	else return false end
 	targetPos = pos
 	flying = true
+	-- Ngoi thuyen thi HRP bi han vao VehicleSeat, BodyVelocity keo khong noi: do that 2026-08-23,
+	-- TP tra false sau 23.6 giay ma chi nhich 42/25,304 studs. Phai roi ghe truoc.
+	do
+		local hum = LP.Character and LP.Character:FindFirstChildWhichIsA("Humanoid")
+		if hum and hum.Sit then hum.Sit = false end
+	end
 	scanNoclip(LP.Character)
 	if not conn then
 		conn = RunService.Heartbeat:Connect(function()
@@ -171,9 +203,17 @@ end
 
 table.insert(getgenv().__TPConns, LP.CharacterAdded:Connect(function(char)
 	char:WaitForChild("HumanoidRootPart", 5)
+	-- Chet giua duong bay (roi xuong bien) thi mover di theo xac cu -> lenh bay coi nhu mat,
+	-- acc hoi sinh xong nam im, ben goi TP quay khong cho het gio (Carter bao 2026-08-23:
+	-- "nhan nhiem vu dojo cai no rot xuong bien"). Nho lai dich va bay tiep sau khi hoi sinh.
+	local resume = flying and targetPos or nil
 	removeMovers()
 	noclipParts = {}
 	stopFly()
+	if resume then
+		task.wait(1)
+		startFly(resume)
+	end
 end))
 table.insert(getgenv().__TPConns, LP.CharacterRemoving:Connect(function()
 	stopFly()
@@ -195,7 +235,17 @@ getgenv().TP = function(target)
 		local root = char and char:FindFirstChild("HumanoidRootPart")
 		if not root then break end
 		local d = (root.Position - pos).Magnitude
-		if d <= arrive then stopFly() return true end
+		if d <= arrive then
+			-- tra lai dieu khien Humanoid ngay khi toi noi, khong thi treo tai cho voi
+			-- PlatformStand = khong dung duoc vu khi (dung loi boss Haki hom truoc)
+			local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+			if hum then hum.PlatformStand = false end
+			-- KHONG stopFly: go luc ra la roi ngay. Do that 2026-08-23: bay xong Y=22,
+			-- 3s sau Y=-14 (roi xuong nuoc, chet dan - dung loi Carter bao).
+			-- Giu BodyVelocity voi van toc 0 -> treo tai cho, van danh duoc vi khong co PlatformStand.
+			-- Muon dat chan xuong dat thi goi getgenv().TPStop().
+			return true
+		end
 		-- khong nhich duoc ~4s lien thi thoi, khoi treo vo han
 		if lastDist and math.abs(lastDist - d) < 2 then
 			stuck = stuck + 1
@@ -205,7 +255,7 @@ getgenv().TP = function(target)
 		end
 		lastDist = d
 	end
-	stopFly()
+	-- het gio hoac ket: van giu bay (khoi roi), chi tra ve ket qua
 	local char = LP.Character
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	return root ~= nil and (root.Position - pos).Magnitude <= arrive * 6
